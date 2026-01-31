@@ -7,7 +7,6 @@ from typing import Any
 from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
-    BinarySensorEntityDescription,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -50,12 +49,12 @@ async def async_setup_entry(
                 HPV1910FanSensor(coordinator, config_entry, fan_id)
             )
 
-    # Add per-port PoE enabled sensors
+    # Add per-port PoE delivering sensors
     if "poe_ports" in coordinator.data:
         for port_data in coordinator.data["poe_ports"]:
             port_name = port_data.get("name", "Unknown")
             entities.append(
-                HPV1910PoEEnabledSensor(coordinator, config_entry, port_name)
+                HPV1910PoEDeliveringSensor(coordinator, config_entry, port_name)
             )
 
     async_add_entities(entities)
@@ -88,6 +87,7 @@ class HPV1910ConnectivitySensor(CoordinatorEntity[HPV1910DataCoordinator], Binar
             model=self.coordinator.data.get("device_name", "V1910-24G-PoE"),
             sw_version=self.coordinator.data.get("software_version"),
             hw_version=self.coordinator.data.get("hardware_version"),
+            serial_number=self.coordinator.data.get("serial_number"),
         )
 
     @property
@@ -131,8 +131,7 @@ class HPV1910PortLinkSensor(CoordinatorEntity[HPV1910DataCoordinator], BinarySen
         ports = self.coordinator.data.get("ports", [])
         for port in ports:
             if port.get("name") == self._port_name:
-                status = port.get("link_status", "").upper()
-                return status in ["UP", "CONNECTED"]
+                return port.get("link_status") == "UP"
         return None
 
     @property
@@ -142,8 +141,10 @@ class HPV1910PortLinkSensor(CoordinatorEntity[HPV1910DataCoordinator], BinarySen
         for port in ports:
             if port.get("name") == self._port_name:
                 return {
-                    "link_status": port.get("link_status"),
-                    "port_number": port.get("port_number"),
+                    "speed": port.get("speed"),
+                    "duplex": port.get("duplex"),
+                    "type": port.get("type"),
+                    "pvid": port.get("pvid"),
                 }
         return None
 
@@ -183,8 +184,8 @@ class HPV1910FanSensor(CoordinatorEntity[HPV1910DataCoordinator], BinarySensorEn
         fans = self.coordinator.data.get("fans", [])
         for fan in fans:
             if fan.get("fan_id") == self._fan_id:
-                status = fan.get("status", "").upper()
-                return status in ["NORMAL", "OK", "RUNNING"]
+                status = fan.get("status", "").lower()
+                return status in ["normal", "ok", "running"]
         return None
 
     @property
@@ -197,8 +198,8 @@ class HPV1910FanSensor(CoordinatorEntity[HPV1910DataCoordinator], BinarySensorEn
         return None
 
 
-class HPV1910PoEEnabledSensor(CoordinatorEntity[HPV1910DataCoordinator], BinarySensorEntity):
-    """Representation of HP V1910 PoE port enabled status."""
+class HPV1910PoEDeliveringSensor(CoordinatorEntity[HPV1910DataCoordinator], BinarySensorEntity):
+    """Representation of HP V1910 PoE port delivering power status."""
 
     _attr_has_entity_name = True
     _attr_device_class = BinarySensorDeviceClass.POWER
@@ -213,8 +214,8 @@ class HPV1910PoEEnabledSensor(CoordinatorEntity[HPV1910DataCoordinator], BinaryS
         """Initialize the sensor."""
         super().__init__(coordinator)
         self._port_name = port_name
-        self._attr_unique_id = f"{config_entry.entry_id}_poe_enabled_{port_name}"
-        self._attr_name = f"PoE Enabled {port_name}"
+        self._attr_unique_id = f"{config_entry.entry_id}_poe_delivering_{port_name}"
+        self._attr_name = f"PoE Delivering {port_name}"
         self._config_entry = config_entry
 
     @property
@@ -229,13 +230,11 @@ class HPV1910PoEEnabledSensor(CoordinatorEntity[HPV1910DataCoordinator], BinaryS
 
     @property
     def is_on(self) -> bool | None:
-        """Return True if PoE is enabled and delivering power."""
+        """Return True if PoE is delivering power."""
         poe_ports = self.coordinator.data.get("poe_ports", [])
         for port in poe_ports:
             if port.get("name") == self._port_name:
-                status = port.get("poe_status", "").upper()
-                power = port.get("power_watts", 0)
-                return status in ["ENABLED", "ON", "DELIVERING"] or power > 0
+                return port.get("operating_status") == "on"
         return None
 
     @property
@@ -245,8 +244,21 @@ class HPV1910PoEEnabledSensor(CoordinatorEntity[HPV1910DataCoordinator], BinaryS
         for port in poe_ports:
             if port.get("name") == self._port_name:
                 return {
-                    "poe_status": port.get("poe_status"),
-                    "poe_class": port.get("poe_class"),
+                    "poe_enabled": port.get("poe_enabled"),
+                    "priority": port.get("priority"),
                     "power_watts": port.get("power_watts"),
+                    "ieee_class": port.get("ieee_class"),
+                    "detection_status": port.get("detection_status"),
                 }
         return None
+
+    @property
+    def icon(self) -> str:
+        """Return icon based on PoE status."""
+        poe_ports = self.coordinator.data.get("poe_ports", [])
+        for port in poe_ports:
+            if port.get("name") == self._port_name:
+                if port.get("operating_status") == "on":
+                    return "mdi:flash"
+                return "mdi:flash-off"
+        return "mdi:flash-off"
