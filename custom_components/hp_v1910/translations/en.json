@@ -1,0 +1,61 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "HP V1910 Switch Configuration",
+        "description": "Enter the connection details for your HP V1910 switch.",
+        "data": {
+          "host": "Host/IP Address",
+          "username": "Username",
+          "password": "Password",
+          "port": "Telnet Port",
+          "scan_interval": "Scan Interval (seconds)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the switch. Please check the IP address and credentials.",
+      "invalid_auth": "Invalid authentication credentials.",
+      "unknown": "An unexpected error occurred."
+    },
+    "abort": {
+      "already_configured": "This switch is already configured."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "cpu_usage": {
+        "name": "CPU Usage"
+      },
+      "memory_usage_percent": {
+        "name": "Memory Usage"
+      },
+      "temperature": {
+        "name": "Temperature"
+      },
+      "poe_power_used": {
+        "name": "PoE Power Used"
+      },
+      "poe_power_remaining": {
+        "name": "PoE Power Remaining"
+      },
+      "poe_power_total": {
+        "name": "PoE Power Total"
+      },
+      "ports_up": {
+        "name": "Ports Up"
+      },
+      "ports_down": {
+        "name": "Ports Down"
+      },
+      "uptime": {
+        "name": "Uptime"
+      }
+    },
+    "binary_sensor": {
+      "connectivity": {
+        "name": "Connectivity"
+      }
+    }
+  }
+}

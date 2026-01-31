@@ -1,0 +1,25 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "HP V1910 Switch Configuration",
+        "description": "Enter the connection details for your HP V1910 switch.",
+        "data": {
+          "host": "Host/IP Address",
+          "username": "Username",
+          "password": "Password",
+          "port": "Telnet Port",
+          "scan_interval": "Scan Interval (seconds)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the switch. Please check the IP address and credentials.",
+      "invalid_auth": "Invalid authentication credentials.",
+      "unknown": "An unexpected error occurred."
+    },
+    "abort": {
+      "already_configured": "This switch is already configured."
+    }
+  }
+}
