@@ -16,6 +16,7 @@ from homeassistant.const import (
     UnitOfPower,
     UnitOfTemperature,
     UnitOfInformation,
+    UnitOfDataRate,
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
@@ -28,7 +29,8 @@ from .coordinator import HPV1910DataCoordinator
 _LOGGER = logging.getLogger(__name__)
 
 
-SENSOR_DESCRIPTIONS: tuple[SensorEntityDescription, ...] = (
+# Main switch sensors
+SWITCH_SENSOR_DESCRIPTIONS: tuple[SensorEntityDescription, ...] = (
     # CPU Sensors
     SensorEntityDescription(
         key="cpu_usage",
@@ -60,33 +62,6 @@ SENSOR_DESCRIPTIONS: tuple[SensorEntityDescription, ...] = (
         native_unit_of_measurement=PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:memory",
-    ),
-    SensorEntityDescription(
-        key="memory_total",
-        name="Memory Total",
-        native_unit_of_measurement=UnitOfInformation.BYTES,
-        device_class=SensorDeviceClass.DATA_SIZE,
-        state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:memory",
-        entity_registry_enabled_default=False,
-    ),
-    SensorEntityDescription(
-        key="memory_used",
-        name="Memory Used",
-        native_unit_of_measurement=UnitOfInformation.BYTES,
-        device_class=SensorDeviceClass.DATA_SIZE,
-        state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:memory",
-        entity_registry_enabled_default=False,
-    ),
-    SensorEntityDescription(
-        key="memory_free",
-        name="Memory Free",
-        native_unit_of_measurement=UnitOfInformation.BYTES,
-        device_class=SensorDeviceClass.DATA_SIZE,
-        state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:memory",
-        entity_registry_enabled_default=False,
     ),
     # Temperature
     SensorEntityDescription(
@@ -120,24 +95,6 @@ SENSOR_DESCRIPTIONS: tuple[SensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:flash-circle",
-    ),
-    SensorEntityDescription(
-        key="poe_current_power",
-        name="PoE Current Power",
-        native_unit_of_measurement=UnitOfPower.WATT,
-        device_class=SensorDeviceClass.POWER,
-        state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:flash",
-        entity_registry_enabled_default=False,
-    ),
-    SensorEntityDescription(
-        key="poe_average_power",
-        name="PoE Average Power",
-        native_unit_of_measurement=UnitOfPower.WATT,
-        device_class=SensorDeviceClass.POWER,
-        state_class=SensorStateClass.MEASUREMENT,
-        icon="mdi:flash",
-        entity_registry_enabled_default=False,
     ),
     SensorEntityDescription(
         key="poe_peak_power",
@@ -180,12 +137,6 @@ SENSOR_DESCRIPTIONS: tuple[SensorEntityDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
     ),
     SensorEntityDescription(
-        key="vlan_count",
-        name="VLAN Count",
-        icon="mdi:lan",
-        state_class=SensorStateClass.MEASUREMENT,
-    ),
-    SensorEntityDescription(
         key="arp_count",
         name="ARP Entry Count",
         icon="mdi:table-network",
@@ -196,48 +147,6 @@ SENSOR_DESCRIPTIONS: tuple[SensorEntityDescription, ...] = (
         key="uptime",
         name="Uptime",
         icon="mdi:clock-outline",
-    ),
-    SensorEntityDescription(
-        key="software_version",
-        name="Software Version",
-        icon="mdi:package-variant",
-        entity_registry_enabled_default=False,
-    ),
-    SensorEntityDescription(
-        key="hardware_version",
-        name="Hardware Version",
-        icon="mdi:chip",
-        entity_registry_enabled_default=False,
-    ),
-    SensorEntityDescription(
-        key="bootrom_version",
-        name="Bootrom Version",
-        icon="mdi:chip",
-        entity_registry_enabled_default=False,
-    ),
-    SensorEntityDescription(
-        key="serial_number",
-        name="Serial Number",
-        icon="mdi:identifier",
-        entity_registry_enabled_default=False,
-    ),
-    SensorEntityDescription(
-        key="device_name",
-        name="Device Model",
-        icon="mdi:switch",
-        entity_registry_enabled_default=False,
-    ),
-    SensorEntityDescription(
-        key="mac_address",
-        name="MAC Address",
-        icon="mdi:ethernet",
-        entity_registry_enabled_default=False,
-    ),
-    SensorEntityDescription(
-        key="manufacturing_date",
-        name="Manufacturing Date",
-        icon="mdi:calendar",
-        entity_registry_enabled_default=False,
     ),
 )
 
@@ -250,41 +159,40 @@ async def async_setup_entry(
     """Set up HP V1910 sensors based on a config entry."""
     coordinator: HPV1910DataCoordinator = hass.data[DOMAIN][config_entry.entry_id]
 
-    entities: list[HPV1910Sensor] = []
+    entities: list[SensorEntity] = []
 
-    # Add main sensors
-    for description in SENSOR_DESCRIPTIONS:
-        entities.append(HPV1910Sensor(coordinator, description, config_entry))
+    # Add main switch sensors
+    for description in SWITCH_SENSOR_DESCRIPTIONS:
+        entities.append(HPV1910SwitchSensor(coordinator, description, config_entry))
 
-    # Add per-port PoE sensors if PoE data is available
+    # Add per-port sensors (each port is a separate device)
+    if "ports" in coordinator.data:
+        for port_data in coordinator.data["ports"]:
+            port_name = port_data.get("name", "Unknown")
+            
+            # Add port status sensor
+            entities.append(
+                HPV1910PortStatusSensor(coordinator, config_entry, port_name)
+            )
+            
+            # Add connected devices sensor
+            entities.append(
+                HPV1910PortConnectedDevicesSensor(coordinator, config_entry, port_name)
+            )
+
+    # Add per-port PoE sensors
     if "poe_ports" in coordinator.data:
         for port_data in coordinator.data["poe_ports"]:
             port_name = port_data.get("name", "Unknown")
             entities.append(
-                HPV1910PoEPortSensor(coordinator, config_entry, port_name)
-            )
-
-    # Add per-port link status sensors
-    if "ports" in coordinator.data:
-        for port_data in coordinator.data["ports"]:
-            port_name = port_data.get("name", "Unknown")
-            entities.append(
-                HPV1910PortStatusSensor(coordinator, config_entry, port_name)
-            )
-
-    # Add temperature sensors for each hotspot
-    if "temperatures" in coordinator.data:
-        for temp_data in coordinator.data["temperatures"]:
-            sensor_id = temp_data.get("sensor_id", 0)
-            entities.append(
-                HPV1910TemperatureSensor(coordinator, config_entry, sensor_id)
+                HPV1910PortPoESensor(coordinator, config_entry, port_name)
             )
 
     async_add_entities(entities)
 
 
-class HPV1910Sensor(CoordinatorEntity[HPV1910DataCoordinator], SensorEntity):
-    """Representation of a HP V1910 sensor."""
+class HPV1910SwitchSensor(CoordinatorEntity[HPV1910DataCoordinator], SensorEntity):
+    """Representation of a HP V1910 main switch sensor."""
 
     _attr_has_entity_name = True
 
@@ -302,105 +210,22 @@ class HPV1910Sensor(CoordinatorEntity[HPV1910DataCoordinator], SensorEntity):
 
     @property
     def device_info(self) -> DeviceInfo:
-        """Return device info."""
+        """Return device info for the main switch."""
         return DeviceInfo(
             identifiers={(DOMAIN, self._config_entry.entry_id)},
-            name=f"HP V1910 ({self.coordinator.host})",
+            name=f"HP V1910 Switch",
             manufacturer="HP/HPE",
             model=self.coordinator.data.get("device_name", "V1910-24G-PoE"),
             sw_version=self.coordinator.data.get("software_version"),
             hw_version=self.coordinator.data.get("hardware_version"),
             serial_number=self.coordinator.data.get("serial_number"),
+            configuration_url=f"http://{self.coordinator.host}",
         )
 
     @property
     def native_value(self) -> Any:
         """Return the state of the sensor."""
         return self.coordinator.data.get(self.entity_description.key)
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any] | None:
-        """Return additional attributes."""
-        attrs = {}
-        key = self.entity_description.key
-        
-        # Add extra context for certain sensors
-        if key == "poe_power_used":
-            attrs["poe_power_total"] = self.coordinator.data.get("poe_power_total")
-            if attrs["poe_power_total"] and self.native_value:
-                attrs["poe_utilization_percent"] = round(
-                    (self.native_value / attrs["poe_power_total"]) * 100, 1
-                )
-        
-        return attrs if attrs else None
-
-
-class HPV1910PoEPortSensor(CoordinatorEntity[HPV1910DataCoordinator], SensorEntity):
-    """Representation of a HP V1910 PoE port power sensor."""
-
-    _attr_has_entity_name = True
-    _attr_native_unit_of_measurement = UnitOfPower.WATT
-    _attr_device_class = SensorDeviceClass.POWER
-    _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_icon = "mdi:flash"
-
-    def __init__(
-        self,
-        coordinator: HPV1910DataCoordinator,
-        config_entry: ConfigEntry,
-        port_name: str,
-    ) -> None:
-        """Initialize the sensor."""
-        super().__init__(coordinator)
-        self._port_name = port_name
-        self._attr_unique_id = f"{config_entry.entry_id}_poe_{port_name}"
-        self._attr_name = f"PoE {port_name}"
-        self._config_entry = config_entry
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        """Return device info."""
-        return DeviceInfo(
-            identifiers={(DOMAIN, self._config_entry.entry_id)},
-            name=f"HP V1910 ({self.coordinator.host})",
-            manufacturer="HP/HPE",
-            model=self.coordinator.data.get("device_name", "V1910-24G-PoE"),
-        )
-
-    @property
-    def native_value(self) -> float | None:
-        """Return the PoE power consumption for this port."""
-        poe_ports = self.coordinator.data.get("poe_ports", [])
-        for port in poe_ports:
-            if port.get("name") == self._port_name:
-                return port.get("power_watts")
-        return None
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any] | None:
-        """Return additional attributes."""
-        poe_ports = self.coordinator.data.get("poe_ports", [])
-        for port in poe_ports:
-            if port.get("name") == self._port_name:
-                return {
-                    "poe_enabled": port.get("poe_enabled"),
-                    "priority": port.get("priority"),
-                    "operating_status": port.get("operating_status"),
-                    "ieee_class": port.get("ieee_class"),
-                    "detection_status": port.get("detection_status"),
-                }
-        return None
-
-    @property
-    def icon(self) -> str:
-        """Return icon based on PoE status."""
-        poe_ports = self.coordinator.data.get("poe_ports", [])
-        for port in poe_ports:
-            if port.get("name") == self._port_name:
-                if port.get("operating_status") == "on":
-                    return "mdi:flash"
-                return "mdi:flash-off"
-        return "mdi:flash-off"
 
 
 class HPV1910PortStatusSensor(CoordinatorEntity[HPV1910DataCoordinator], SensorEntity):
@@ -418,105 +243,246 @@ class HPV1910PortStatusSensor(CoordinatorEntity[HPV1910DataCoordinator], SensorE
         """Initialize the sensor."""
         super().__init__(coordinator)
         self._port_name = port_name
-        self._attr_unique_id = f"{config_entry.entry_id}_port_{port_name}"
-        self._attr_name = f"Port {port_name}"
+        self._port_number = self._extract_port_number(port_name)
+        self._attr_unique_id = f"{config_entry.entry_id}_{port_name}_status"
+        self._attr_name = "Status"
         self._config_entry = config_entry
-        self._attr_entity_registry_enabled_default = False
+
+    def _extract_port_number(self, port_name: str) -> str:
+        """Extract port number from name like GE1/0/1 -> 1."""
+        parts = port_name.split("/")
+        if len(parts) >= 3:
+            return parts[-1]
+        return port_name
 
     @property
     def device_info(self) -> DeviceInfo:
-        """Return device info."""
+        """Return device info for this port."""
+        # Get port-specific info
+        port_data = self._get_port_data()
+        connected_devices = self._get_connected_devices()
+        
+        # Build model string with connection info
+        model = f"Switch Port {self._port_number}"
+        if port_data and port_data.get("link_status") == "UP":
+            speed = port_data.get("speed", "")
+            model = f"Port {self._port_number} ({speed})"
+        
         return DeviceInfo(
-            identifiers={(DOMAIN, self._config_entry.entry_id)},
-            name=f"HP V1910 ({self.coordinator.host})",
+            identifiers={(DOMAIN, f"{self._config_entry.entry_id}_{self._port_name}")},
+            name=f"Port {self._port_number}",
             manufacturer="HP/HPE",
-            model=self.coordinator.data.get("device_name", "V1910-24G-PoE"),
+            model=model,
+            via_device=(DOMAIN, self._config_entry.entry_id),
         )
 
-    @property
-    def native_value(self) -> str | None:
-        """Return the link status for this port."""
+    def _get_port_data(self) -> dict | None:
+        """Get port data from coordinator."""
         ports = self.coordinator.data.get("ports", [])
         for port in ports:
             if port.get("name") == self._port_name:
-                return port.get("link_status")
+                return port
+        return None
+
+    def _get_connected_devices(self) -> list[dict]:
+        """Get connected devices for this port."""
+        port_devices = self.coordinator.data.get("port_devices", {})
+        return port_devices.get(self._port_name, [])
+
+    @property
+    def native_value(self) -> str | None:
+        """Return the link status."""
+        port_data = self._get_port_data()
+        if port_data:
+            return port_data.get("link_status")
         return None
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
         """Return additional attributes."""
-        ports = self.coordinator.data.get("ports", [])
-        for port in ports:
-            if port.get("name") == self._port_name:
-                return {
-                    "speed": port.get("speed"),
-                    "duplex": port.get("duplex"),
-                    "type": port.get("type"),
-                    "pvid": port.get("pvid"),
-                }
+        port_data = self._get_port_data()
+        if port_data:
+            return {
+                "speed": port_data.get("speed"),
+                "duplex": port_data.get("duplex"),
+                "port_type": port_data.get("type"),
+                "pvid": port_data.get("pvid"),
+                "port_name": self._port_name,
+            }
         return None
 
     @property
     def icon(self) -> str:
         """Return icon based on port status."""
-        ports = self.coordinator.data.get("ports", [])
-        for port in ports:
-            if port.get("name") == self._port_name:
-                if port.get("link_status") == "UP":
-                    return "mdi:ethernet"
-                return "mdi:ethernet-off"
+        port_data = self._get_port_data()
+        if port_data and port_data.get("link_status") == "UP":
+            return "mdi:ethernet"
         return "mdi:ethernet-off"
 
 
-class HPV1910TemperatureSensor(CoordinatorEntity[HPV1910DataCoordinator], SensorEntity):
-    """Representation of a HP V1910 temperature sensor."""
+class HPV1910PortConnectedDevicesSensor(CoordinatorEntity[HPV1910DataCoordinator], SensorEntity):
+    """Sensor showing connected devices on a port."""
 
     _attr_has_entity_name = True
-    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
-    _attr_device_class = SensorDeviceClass.TEMPERATURE
-    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:devices"
 
     def __init__(
         self,
         coordinator: HPV1910DataCoordinator,
         config_entry: ConfigEntry,
-        sensor_id: int,
+        port_name: str,
     ) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
-        self._sensor_id = sensor_id
-        self._attr_unique_id = f"{config_entry.entry_id}_temp_{sensor_id}"
-        self._attr_name = f"Temperature Sensor {sensor_id}"
+        self._port_name = port_name
+        self._port_number = self._extract_port_number(port_name)
+        self._attr_unique_id = f"{config_entry.entry_id}_{port_name}_connected"
+        self._attr_name = "Connected Devices"
         self._config_entry = config_entry
-        self._attr_entity_registry_enabled_default = False
+
+    def _extract_port_number(self, port_name: str) -> str:
+        """Extract port number from name."""
+        parts = port_name.split("/")
+        if len(parts) >= 3:
+            return parts[-1]
+        return port_name
 
     @property
     def device_info(self) -> DeviceInfo:
-        """Return device info."""
+        """Return device info for this port."""
         return DeviceInfo(
-            identifiers={(DOMAIN, self._config_entry.entry_id)},
-            name=f"HP V1910 ({self.coordinator.host})",
+            identifiers={(DOMAIN, f"{self._config_entry.entry_id}_{self._port_name}")},
+            name=f"Port {self._port_number}",
             manufacturer="HP/HPE",
-            model=self.coordinator.data.get("device_name", "V1910-24G-PoE"),
+            via_device=(DOMAIN, self._config_entry.entry_id),
         )
 
+    def _get_connected_devices(self) -> list[dict]:
+        """Get connected devices for this port."""
+        port_devices = self.coordinator.data.get("port_devices", {})
+        return port_devices.get(self._port_name, [])
+
     @property
-    def native_value(self) -> int | None:
-        """Return the temperature for this sensor."""
-        temperatures = self.coordinator.data.get("temperatures", [])
-        for temp in temperatures:
-            if temp.get("sensor_id") == self._sensor_id:
-                return temp.get("temperature")
+    def native_value(self) -> int:
+        """Return the number of connected devices."""
+        return len(self._get_connected_devices())
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Return connected devices as attributes."""
+        devices = self._get_connected_devices()
+        if not devices:
+            return {"devices": [], "device_list": "None"}
+        
+        # Build device list string
+        device_list = []
+        device_details = []
+        
+        for i, dev in enumerate(devices):
+            ip = dev.get("ip_address", "")
+            mac = dev.get("mac_address", "")
+            
+            if ip:
+                device_list.append(f"{ip} ({mac})")
+            else:
+                device_list.append(mac)
+            
+            device_details.append({
+                "ip": ip or "Unknown",
+                "mac": mac,
+                "vlan": dev.get("vlan", 1),
+            })
+        
+        # Also add individual device attributes for easy access
+        attrs = {
+            "device_count": len(devices),
+            "device_list": ", ".join(device_list),
+            "devices": device_details,
+        }
+        
+        # Add first few devices as direct attributes
+        for i, dev in enumerate(devices[:5]):
+            prefix = f"device_{i+1}"
+            attrs[f"{prefix}_ip"] = dev.get("ip_address", "Unknown")
+            attrs[f"{prefix}_mac"] = dev.get("mac_address", "")
+        
+        return attrs
+
+
+class HPV1910PortPoESensor(CoordinatorEntity[HPV1910DataCoordinator], SensorEntity):
+    """Representation of a HP V1910 port PoE power sensor."""
+
+    _attr_has_entity_name = True
+    _attr_native_unit_of_measurement = UnitOfPower.WATT
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:flash"
+
+    def __init__(
+        self,
+        coordinator: HPV1910DataCoordinator,
+        config_entry: ConfigEntry,
+        port_name: str,
+    ) -> None:
+        """Initialize the sensor."""
+        super().__init__(coordinator)
+        self._port_name = port_name
+        self._port_number = self._extract_port_number(port_name)
+        self._attr_unique_id = f"{config_entry.entry_id}_{port_name}_poe"
+        self._attr_name = "PoE Power"
+        self._config_entry = config_entry
+
+    def _extract_port_number(self, port_name: str) -> str:
+        """Extract port number from name."""
+        parts = port_name.split("/")
+        if len(parts) >= 3:
+            return parts[-1]
+        return port_name
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return device info for this port."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, f"{self._config_entry.entry_id}_{self._port_name}")},
+            name=f"Port {self._port_number}",
+            manufacturer="HP/HPE",
+            via_device=(DOMAIN, self._config_entry.entry_id),
+        )
+
+    def _get_poe_data(self) -> dict | None:
+        """Get PoE data for this port."""
+        poe_ports = self.coordinator.data.get("poe_ports", [])
+        for port in poe_ports:
+            if port.get("name") == self._port_name:
+                return port
+        return None
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the PoE power consumption."""
+        poe_data = self._get_poe_data()
+        if poe_data:
+            return poe_data.get("power_watts")
         return None
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
-        """Return additional attributes."""
-        temperatures = self.coordinator.data.get("temperatures", [])
-        for temp in temperatures:
-            if temp.get("sensor_id") == self._sensor_id:
-                return {
-                    "warning_limit": temp.get("warning_limit"),
-                    "alarm_limit": temp.get("alarm_limit"),
-                }
+        """Return additional PoE attributes."""
+        poe_data = self._get_poe_data()
+        if poe_data:
+            return {
+                "poe_enabled": poe_data.get("poe_enabled"),
+                "priority": poe_data.get("priority"),
+                "operating_status": poe_data.get("operating_status"),
+                "ieee_class": poe_data.get("ieee_class"),
+                "detection_status": poe_data.get("detection_status"),
+            }
         return None
+
+    @property
+    def icon(self) -> str:
+        """Return icon based on PoE status."""
+        poe_data = self._get_poe_data()
+        if poe_data and poe_data.get("operating_status") == "on":
+            return "mdi:flash"
+        return "mdi:flash-off"
