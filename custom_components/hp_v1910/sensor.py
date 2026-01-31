@@ -15,10 +15,8 @@ from homeassistant.const import (
     PERCENTAGE,
     UnitOfPower,
     UnitOfTemperature,
-    UnitOfInformation,
-    UnitOfDataRate,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -31,7 +29,6 @@ _LOGGER = logging.getLogger(__name__)
 
 # Main switch sensors
 SWITCH_SENSOR_DESCRIPTIONS: tuple[SensorEntityDescription, ...] = (
-    # CPU Sensors
     SensorEntityDescription(
         key="cpu_usage",
         name="CPU Usage",
@@ -55,7 +52,6 @@ SWITCH_SENSOR_DESCRIPTIONS: tuple[SensorEntityDescription, ...] = (
         icon="mdi:cpu-64-bit",
         entity_registry_enabled_default=False,
     ),
-    # Memory Sensors
     SensorEntityDescription(
         key="memory_usage_percent",
         name="Memory Usage",
@@ -63,7 +59,6 @@ SWITCH_SENSOR_DESCRIPTIONS: tuple[SensorEntityDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:memory",
     ),
-    # Temperature
     SensorEntityDescription(
         key="temperature",
         name="Temperature",
@@ -71,7 +66,6 @@ SWITCH_SENSOR_DESCRIPTIONS: tuple[SensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
     ),
-    # PoE Sensors
     SensorEntityDescription(
         key="poe_power_used",
         name="PoE Power Used",
@@ -110,7 +104,6 @@ SWITCH_SENSOR_DESCRIPTIONS: tuple[SensorEntityDescription, ...] = (
         icon="mdi:ethernet",
         state_class=SensorStateClass.MEASUREMENT,
     ),
-    # Port Sensors
     SensorEntityDescription(
         key="port_count",
         name="Total Ports",
@@ -129,7 +122,6 @@ SWITCH_SENSOR_DESCRIPTIONS: tuple[SensorEntityDescription, ...] = (
         icon="mdi:ethernet-off",
         state_class=SensorStateClass.MEASUREMENT,
     ),
-    # Network Sensors
     SensorEntityDescription(
         key="mac_count",
         name="MAC Address Count",
@@ -142,13 +134,59 @@ SWITCH_SENSOR_DESCRIPTIONS: tuple[SensorEntityDescription, ...] = (
         icon="mdi:table-network",
         state_class=SensorStateClass.MEASUREMENT,
     ),
-    # System Info
     SensorEntityDescription(
         key="uptime",
         name="Uptime",
         icon="mdi:clock-outline",
     ),
 )
+
+
+class HPV1910EntityManager:
+    """Manage dynamic entities for connected clients."""
+    
+    def __init__(
+        self,
+        coordinator: HPV1910DataCoordinator,
+        config_entry: ConfigEntry,
+        async_add_entities: AddEntitiesCallback,
+    ) -> None:
+        """Initialize the entity manager."""
+        self._coordinator = coordinator
+        self._config_entry = config_entry
+        self._async_add_entities = async_add_entities
+        self._tracked_clients: set[str] = set()
+    
+    @callback
+    def async_update_items(self) -> None:
+        """Update connected client entities."""
+        port_devices = self._coordinator.data.get("port_devices", {})
+        
+        new_entities = []
+        
+        for port_name, devices in port_devices.items():
+            for device in devices:
+                mac = device.get("mac_address", "").lower().replace("-", "").replace(":", "")
+                if not mac:
+                    continue
+                
+                client_id = f"{mac}"
+                
+                if client_id not in self._tracked_clients:
+                    self._tracked_clients.add(client_id)
+                    # Create entities for this new client
+                    new_entities.append(
+                        HPV1910ClientSensor(
+                            self._coordinator,
+                            self._config_entry,
+                            mac,
+                            device,
+                            port_name,
+                        )
+                    )
+        
+        if new_entities:
+            self._async_add_entities(new_entities)
 
 
 async def async_setup_entry(
@@ -165,17 +203,13 @@ async def async_setup_entry(
     for description in SWITCH_SENSOR_DESCRIPTIONS:
         entities.append(HPV1910SwitchSensor(coordinator, description, config_entry))
 
-    # Add per-port sensors (each port is a separate device)
+    # Add per-port sensors
     if "ports" in coordinator.data:
         for port_data in coordinator.data["ports"]:
             port_name = port_data.get("name", "Unknown")
-            
-            # Add port status sensor
             entities.append(
                 HPV1910PortStatusSensor(coordinator, config_entry, port_name)
             )
-            
-            # Add connected devices sensor
             entities.append(
                 HPV1910PortConnectedDevicesSensor(coordinator, config_entry, port_name)
             )
@@ -188,7 +222,25 @@ async def async_setup_entry(
                 HPV1910PortPoESensor(coordinator, config_entry, port_name)
             )
 
+    # Add connected client sensors (devices connected to ports)
+    port_devices = coordinator.data.get("port_devices", {})
+    for port_name, devices in port_devices.items():
+        for device in devices:
+            mac = device.get("mac_address", "")
+            if mac:
+                entities.append(
+                    HPV1910ClientSensor(coordinator, config_entry, mac, device, port_name)
+                )
+
     async_add_entities(entities)
+
+    # Set up entity manager for dynamic client updates
+    entity_manager = HPV1910EntityManager(coordinator, config_entry, async_add_entities)
+    
+    # Listen for coordinator updates to add new clients
+    config_entry.async_on_unload(
+        coordinator.async_add_listener(entity_manager.async_update_items)
+    )
 
 
 class HPV1910SwitchSensor(CoordinatorEntity[HPV1910DataCoordinator], SensorEntity):
@@ -213,7 +265,7 @@ class HPV1910SwitchSensor(CoordinatorEntity[HPV1910DataCoordinator], SensorEntit
         """Return device info for the main switch."""
         return DeviceInfo(
             identifiers={(DOMAIN, self._config_entry.entry_id)},
-            name=f"HP V1910 Switch",
+            name="HP V1910 Switch",
             manufacturer="HP/HPE",
             model=self.coordinator.data.get("device_name", "V1910-24G-PoE"),
             sw_version=self.coordinator.data.get("software_version"),
@@ -258,11 +310,7 @@ class HPV1910PortStatusSensor(CoordinatorEntity[HPV1910DataCoordinator], SensorE
     @property
     def device_info(self) -> DeviceInfo:
         """Return device info for this port."""
-        # Get port-specific info
         port_data = self._get_port_data()
-        connected_devices = self._get_connected_devices()
-        
-        # Build model string with connection info
         model = f"Switch Port {self._port_number}"
         if port_data and port_data.get("link_status") == "UP":
             speed = port_data.get("speed", "")
@@ -283,11 +331,6 @@ class HPV1910PortStatusSensor(CoordinatorEntity[HPV1910DataCoordinator], SensorE
             if port.get("name") == self._port_name:
                 return port
         return None
-
-    def _get_connected_devices(self) -> list[dict]:
-        """Get connected devices for this port."""
-        port_devices = self.coordinator.data.get("port_devices", {})
-        return port_devices.get(self._port_name, [])
 
     @property
     def native_value(self) -> str | None:
@@ -374,33 +417,28 @@ class HPV1910PortConnectedDevicesSensor(CoordinatorEntity[HPV1910DataCoordinator
         if not devices:
             return {"devices": [], "device_list": "None"}
         
-        # Build device list string
         device_list = []
         device_details = []
         
-        for i, dev in enumerate(devices):
+        for dev in devices:
             ip = dev.get("ip_address", "")
             mac = dev.get("mac_address", "")
-            
             if ip:
                 device_list.append(f"{ip} ({mac})")
             else:
                 device_list.append(mac)
-            
             device_details.append({
                 "ip": ip or "Unknown",
                 "mac": mac,
                 "vlan": dev.get("vlan", 1),
             })
         
-        # Also add individual device attributes for easy access
         attrs = {
             "device_count": len(devices),
             "device_list": ", ".join(device_list),
             "devices": device_details,
         }
         
-        # Add first few devices as direct attributes
         for i, dev in enumerate(devices[:5]):
             prefix = f"device_{i+1}"
             attrs[f"{prefix}_ip"] = dev.get("ip_address", "Unknown")
@@ -486,3 +524,134 @@ class HPV1910PortPoESensor(CoordinatorEntity[HPV1910DataCoordinator], SensorEnti
         if poe_data and poe_data.get("operating_status") == "on":
             return "mdi:flash"
         return "mdi:flash-off"
+
+
+class HPV1910ClientSensor(CoordinatorEntity[HPV1910DataCoordinator], SensorEntity):
+    """Representation of a connected client device."""
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:devices"
+
+    def __init__(
+        self,
+        coordinator: HPV1910DataCoordinator,
+        config_entry: ConfigEntry,
+        mac_address: str,
+        device_info_data: dict,
+        port_name: str,
+    ) -> None:
+        """Initialize the sensor."""
+        super().__init__(coordinator)
+        self._mac_address = mac_address.lower().replace("-", ":").replace(".", ":")
+        self._mac_normalized = mac_address.lower().replace("-", "").replace(":", "").replace(".", "")
+        self._initial_ip = device_info_data.get("ip_address", "")
+        self._initial_port = port_name
+        self._port_number = self._extract_port_number(port_name)
+        self._config_entry = config_entry
+        self._attr_unique_id = f"{config_entry.entry_id}_client_{self._mac_normalized}"
+        self._attr_name = "Connection"
+
+    def _extract_port_number(self, port_name: str) -> str:
+        """Extract port number from name."""
+        parts = port_name.split("/")
+        if len(parts) >= 3:
+            return parts[-1]
+        return port_name
+
+    def _get_current_client_data(self) -> tuple[dict | None, str | None]:
+        """Find current data for this client across all ports."""
+        port_devices = self.coordinator.data.get("port_devices", {})
+        for port_name, devices in port_devices.items():
+            for device in devices:
+                mac = device.get("mac_address", "").lower().replace("-", "").replace(":", "").replace(".", "")
+                if mac == self._mac_normalized:
+                    return device, port_name
+        return None, None
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return device info for this connected client."""
+        device_data, current_port = self._get_current_client_data()
+        
+        # Use current data if available, otherwise use initial data
+        ip = ""
+        if device_data:
+            ip = device_data.get("ip_address", "")
+            current_port = current_port or self._initial_port
+        else:
+            ip = self._initial_ip
+            current_port = self._initial_port
+        
+        port_number = self._extract_port_number(current_port) if current_port else self._port_number
+        
+        # Format MAC address nicely
+        mac_formatted = ":".join(
+            self._mac_normalized[i:i+2].upper() 
+            for i in range(0, 12, 2)
+        ) if len(self._mac_normalized) == 12 else self._mac_address
+        
+        # Create a descriptive name
+        if ip:
+            name = f"{ip}"
+        else:
+            name = f"Device {mac_formatted[-8:]}"
+        
+        # The via_device links to the PORT this device is connected through
+        port_identifier = f"{self._config_entry.entry_id}_{current_port}"
+        
+        return DeviceInfo(
+            identifiers={(DOMAIN, f"{self._config_entry.entry_id}_client_{self._mac_normalized}")},
+            connections={("mac", mac_formatted.lower())},
+            name=name,
+            manufacturer="Network Device",
+            model=f"Connected via Port {port_number}",
+            via_device=(DOMAIN, port_identifier),
+        )
+
+    @property
+    def native_value(self) -> str | None:
+        """Return connection status."""
+        device_data, current_port = self._get_current_client_data()
+        if device_data and current_port:
+            return f"Port {self._extract_port_number(current_port)}"
+        return "Disconnected"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """Return additional client attributes."""
+        device_data, current_port = self._get_current_client_data()
+        
+        mac_formatted = ":".join(
+            self._mac_normalized[i:i+2].upper() 
+            for i in range(0, 12, 2)
+        ) if len(self._mac_normalized) == 12 else self._mac_address
+        
+        if device_data:
+            return {
+                "mac_address": mac_formatted,
+                "ip_address": device_data.get("ip_address", "Unknown"),
+                "vlan": device_data.get("vlan", 1),
+                "port": current_port,
+                "port_number": self._extract_port_number(current_port) if current_port else None,
+                "connected": True,
+            }
+        return {
+            "mac_address": mac_formatted,
+            "ip_address": self._initial_ip or "Unknown",
+            "port": self._initial_port,
+            "connected": False,
+        }
+
+    @property
+    def available(self) -> bool:
+        """Return True if entity is available."""
+        # Entity is always available when coordinator is
+        return self.coordinator.last_update_success
+
+    @property
+    def icon(self) -> str:
+        """Return icon based on connection status."""
+        device_data, _ = self._get_current_client_data()
+        if device_data:
+            return "mdi:lan-connect"
+        return "mdi:lan-disconnect"
