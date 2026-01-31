@@ -40,9 +40,13 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
         port=data.get(CONF_PORT, DEFAULT_PORT),
     )
 
+    _LOGGER.debug("Testing connection to %s:%s", data[CONF_HOST], data.get(CONF_PORT, DEFAULT_PORT))
+    
     if not await client.test_connection():
+        _LOGGER.error("Connection test failed for %s", data[CONF_HOST])
         raise CannotConnect("Failed to connect to the switch")
 
+    _LOGGER.info("Connection test successful for %s", data[CONF_HOST])
     # Return info to store in the config entry
     return {"title": f"HP V1910 ({data[CONF_HOST]})"}
 

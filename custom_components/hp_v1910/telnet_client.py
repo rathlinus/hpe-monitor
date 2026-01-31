@@ -36,21 +36,45 @@ class HPV1910TelnetClient:
     def _connect_sync(self) -> bool:
         """Synchronous connect method."""
         try:
+            _LOGGER.debug("Attempting telnet connection to %s:%s", self._host, self._port)
             self._telnet = telnetlib.Telnet(self._host, self._port, self._timeout)
+            _LOGGER.debug("Telnet connection established, waiting for login prompt")
             
-            # Wait for login prompt
-            self._telnet.read_until(b"Login:", timeout=self._timeout)
-            self._telnet.write(self._username.encode('ascii') + b"\n")
+            # Wait for login prompt - handle variations
+            response = self._telnet.read_until(b":", timeout=self._timeout)
+            response_str = response.decode('ascii', errors='ignore').lower()
+            _LOGGER.debug("Initial response: %s", response_str[-200:] if len(response_str) > 200 else response_str)
+            
+            # Check if this is a login or username prompt
+            if "login" in response_str or "username" in response_str or "user" in response_str:
+                self._telnet.write(self._username.encode('ascii') + b"\n")
+            else:
+                _LOGGER.warning("Unexpected prompt (expected login): %s", response_str[-100:])
+                self._telnet.write(self._username.encode('ascii') + b"\n")
             
             # Wait for password prompt
-            self._telnet.read_until(b"Password:", timeout=self._timeout)
-            self._telnet.write(self._password.encode('ascii') + b"\n")
+            response = self._telnet.read_until(b":", timeout=self._timeout)
+            response_str = response.decode('ascii', errors='ignore').lower()
+            _LOGGER.debug("Password prompt response: %s", response_str[-100:] if len(response_str) > 100 else response_str)
             
-            # Wait for command prompt (ends with >)
+            if "password" in response_str or "pass" in response_str:
+                self._telnet.write(self._password.encode('ascii') + b"\n")
+            else:
+                _LOGGER.warning("Unexpected prompt (expected password): %s", response_str[-100:])
+                self._telnet.write(self._password.encode('ascii') + b"\n")
+            
+            # Wait for command prompt (ends with > or #)
             response = self._telnet.read_until(b">", timeout=self._timeout)
+            response_str = response.decode('ascii', errors='ignore')
+            _LOGGER.debug("Login response: %s", response_str[-200:] if len(response_str) > 200 else response_str)
             
-            if b">" not in response:
-                _LOGGER.error("Login failed - unexpected response")
+            # Check for authentication failure indicators
+            if "invalid" in response_str.lower() or "failed" in response_str.lower() or "denied" in response_str.lower():
+                _LOGGER.error("Authentication failed - invalid credentials")
+                return False
+            
+            if b">" not in response and b"#" not in response:
+                _LOGGER.error("Login failed - no command prompt received. Response: %s", response_str[-200:])
                 return False
             
             _LOGGER.info("Successfully connected to HP V1910 at %s", self._host)
@@ -61,8 +85,17 @@ class HPV1910TelnetClient:
             
             return True
                 
+        except ConnectionRefusedError:
+            _LOGGER.error("Connection refused by %s:%s - telnet may be disabled", self._host, self._port)
+            return False
+        except TimeoutError:
+            _LOGGER.error("Connection timeout to %s:%s - check network/firewall", self._host, self._port)
+            return False
+        except OSError as err:
+            _LOGGER.error("Network error connecting to %s:%s: %s", self._host, self._port, err)
+            return False
         except Exception as err:
-            _LOGGER.error("Connection error: %s", err)
+            _LOGGER.error("Connection error to %s:%s: %s", self._host, self._port, err)
             return False
 
     def _enable_cmdline_mode(self) -> bool:
