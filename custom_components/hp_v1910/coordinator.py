@@ -1,7 +1,7 @@
 """Data coordinator for HP V1910 Switch."""
 import asyncio
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -37,6 +37,11 @@ class HPV1910DataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._password = password
         self._port = port
         self._client = HPV1910TelnetClient(host, username, password, port)
+        
+        # Energy tracking: cumulative kWh per port
+        self._port_energy_kwh: dict[str, float] = {}
+        self._last_update_time: datetime | None = None
+        self._last_port_power: dict[str, float] = {}
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from the switch."""
@@ -52,6 +57,10 @@ class HPV1910DataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             
             # Build per-port device mapping
             data["port_devices"] = self._build_port_device_mapping(data)
+            
+            # Calculate cumulative energy consumption per PoE port
+            self._calculate_port_energy(data)
+            data["port_energy_kwh"] = self._port_energy_kwh.copy()
             
             return data
             
@@ -91,6 +100,39 @@ class HPV1910DataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             port_devices[port].append(device_info)
         
         return port_devices
+
+    def _calculate_port_energy(self, data: dict[str, Any]) -> None:
+        """Calculate cumulative energy consumption per PoE port in kWh."""
+        current_time = datetime.now()
+        
+        # Get current power readings for each PoE port
+        current_port_power: dict[str, float] = {}
+        for poe_port in data.get("poe_ports", []):
+            port_name = poe_port.get("name", "")
+            power_watts = poe_port.get("power_watts", 0.0)
+            if port_name:
+                current_port_power[port_name] = power_watts
+                # Initialize energy counter if not exists
+                if port_name not in self._port_energy_kwh:
+                    self._port_energy_kwh[port_name] = 0.0
+        
+        # Calculate energy consumed since last update
+        if self._last_update_time is not None and self._last_port_power:
+            time_delta = (current_time - self._last_update_time).total_seconds()
+            hours = time_delta / 3600.0  # Convert seconds to hours
+            
+            for port_name, current_power in current_port_power.items():
+                # Use average of previous and current power for better accuracy
+                previous_power = self._last_port_power.get(port_name, current_power)
+                avg_power = (previous_power + current_power) / 2.0
+                
+                # Calculate energy: kWh = (W * h) / 1000
+                energy_kwh = (avg_power * hours) / 1000.0
+                self._port_energy_kwh[port_name] += energy_kwh
+        
+        # Store current readings for next update
+        self._last_update_time = current_time
+        self._last_port_power = current_port_power
 
     @property
     def host(self) -> str:
