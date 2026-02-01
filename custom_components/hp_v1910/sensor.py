@@ -106,6 +106,14 @@ SWITCH_SENSOR_DESCRIPTIONS: tuple[SensorEntityDescription, ...] = (
         icon="mdi:flash-alert",
     ),
     SensorEntityDescription(
+        key="poe_total_energy_kwh",
+        name="PoE Total Energy",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        icon="mdi:lightning-bolt",
+    ),
+    SensorEntityDescription(
         key="poe_ports_on",
         name="PoE Ports Active",
         icon="mdi:ethernet",

@@ -62,6 +62,9 @@ class HPV1910DataCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._calculate_port_energy(data)
             data["port_energy_kwh"] = self._port_energy_kwh.copy()
             
+            # Calculate total energy across all ports
+            data["poe_total_energy_kwh"] = round(sum(self._port_energy_kwh.values()), 3)
+            
             return data
             
         except Exception as err:
